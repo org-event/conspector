@@ -1,0 +1,24 @@
+node_modules/
+dist/
+.venv/
+.tools/
+*.webm
+package-lock.json
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Runtime data
+data/
+server/data/
+*.egg-info/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
