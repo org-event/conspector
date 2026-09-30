@@ -101,13 +101,20 @@ curl -s -F "audio=@meeting.webm" -F "speakers=@speakers.jsonl" \
 
 Статусы: `queued` → `transcribing` → `summarizing` → `done` | `error`.
 
-После `done` появляется **`conspect.md`**:
+После `done` появляются **`conspect.md`** и **`conspect.html`**:
 
-`server/data/jobs/<id>/conspect.md`
+`server/data/jobs/<id>/conspect.md`  
+`server/data/jobs/<id>/conspect.html`
 
 ```bash
+# В браузере — сворачиваемый транскрипт (<details>)
+open http://127.0.0.1:8765/v1/jobs/<id>/conspect.html
+
+# Сырой markdown
 curl -O http://127.0.0.1:8765/v1/jobs/<id>/conspect.md
 ```
+
+В редакторе Cursor/VS Code `<details>` в `.md` **не** сворачивается — это исходник. Сворачивание работает в HTML-просмотре и на GitHub.
 
 Пайплайн после upload **сам**: Whisper (речь→текст) → Qwen (конспект) → `conspect.md`.
 

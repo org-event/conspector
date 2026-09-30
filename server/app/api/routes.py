@@ -4,11 +4,11 @@ import threading
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.config import settings
 from app.services.asr import is_model_loaded, segments_to_transcript_text, transcribe_file
-from app.services.conspect_md import write_conspect_md
+from app.services.conspect_md import ensure_conspect_html, write_conspect_md
 from app.services.jobs import store
 from app.services.summarize import summarize_transcript
 
@@ -16,6 +16,38 @@ router = APIRouter()
 
 # One heavy ASR (+ sequential summarize) at a time on the prototype.
 _pipeline_lock = threading.Lock()
+
+
+def _ensure_conspect_files(job_id: str) -> Path | None:
+    """Return job_dir if conspect.md exists (writing from in-memory result if needed)."""
+    job_dir = Path(settings.data_dir) / "jobs" / job_id
+    path = job_dir / "conspect.md"
+    if path.exists() and path.stat().st_size > 0:
+        return job_dir
+
+    job = store.get(job_id)
+    if job is not None and job.status == "done" and job.result:
+        result = job.result or {}
+        write_conspect_md(
+            job_dir,
+            job_id=job_id,
+            transcript_text=str(result.get("transcriptText") or ""),
+            summary=str(result.get("summary") or ""),
+        )
+        if path.exists():
+            return job_dir
+    return None
+
+
+def _conspect_unavailable(job_id: str) -> None:
+    job_dir = Path(settings.data_dir) / "jobs" / job_id
+    job = store.get(job_id)
+    if not (job_dir / "audio.webm").exists() and job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    raise HTTPException(
+        status_code=409,
+        detail="Конспект ещё не готов (или сервер перезапускали до записи файла)",
+    )
 
 
 @router.get("/health")
@@ -95,37 +127,24 @@ def get_job(job_id: str) -> dict:
 
 @router.get("/v1/jobs/{job_id}/conspect.md")
 def get_conspect_markdown(job_id: str):
-    """Download meeting notes: from disk, or build from in-memory job result."""
-    job_dir = Path(settings.data_dir) / "jobs" / job_id
-    path = job_dir / "conspect.md"
-    job = store.get(job_id)
-
-    # Prefer existing file (survives server restart).
-    if path.exists() and path.stat().st_size > 0:
-        return FileResponse(
-            path,
-            media_type="text/markdown; charset=utf-8",
-            filename=f"{job_id}-conspect.md",
-        )
-
-    if job is not None and job.status == "done" and job.result:
-        result = job.result or {}
-        write_conspect_md(
-            job_dir,
-            job_id=job_id,
-            transcript_text=str(result.get("transcriptText") or ""),
-            summary=str(result.get("summary") or ""),
-        )
-        if path.exists():
-            return FileResponse(
-                path,
-                media_type="text/markdown; charset=utf-8",
-                filename=f"{job_id}-conspect.md",
-            )
-
-    if not (job_dir / "audio.webm").exists() and job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    raise HTTPException(
-        status_code=409,
-        detail="Конспект ещё не готов (или сервер перезапускали до записи файла)",
+    """Download meeting notes as Markdown."""
+    job_dir = _ensure_conspect_files(job_id)
+    if job_dir is None:
+        _conspect_unavailable(job_id)
+    return FileResponse(
+        job_dir / "conspect.md",
+        media_type="text/markdown; charset=utf-8",
+        filename=f"{job_id}-conspect.md",
     )
+
+
+@router.get("/v1/jobs/{job_id}/conspect.html")
+def get_conspect_html(job_id: str):
+    """Browser view with working <details> transcript collapse."""
+    job_dir = _ensure_conspect_files(job_id)
+    if job_dir is None:
+        _conspect_unavailable(job_id)
+    html_path = ensure_conspect_html(job_dir, job_id)
+    if html_path is None:
+        raise HTTPException(status_code=409, detail="HTML-конспект ещё не готов")
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))

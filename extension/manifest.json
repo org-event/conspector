@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Conspector",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "permissions": ["storage", "tabs", "tabCapture", "activeTab", "offscreen", "scripting"],
   "host_permissions": ["http://127.0.0.1:*/*", "http://localhost:*/*"],
   "action": {

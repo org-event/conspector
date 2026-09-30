@@ -113,6 +113,15 @@ def test_job_reaches_done_with_asr_transcript():
     assert "Привет команда" in md.text
     assert "MOCK_SUMMARY" in md.text
 
+    html_path = Path(settings.data_dir) / "jobs" / job_id / "conspect.html"
+    assert html_path.exists()
+    page = client.get(f"/v1/jobs/{job_id}/conspect.html")
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert "<details>" in page.text
+    assert "Привет команда" in page.text
+    assert "MOCK_SUMMARY" in page.text
+
 
 def test_conspect_md_before_done_returns_409():
     client = TestClient(app)

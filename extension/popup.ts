@@ -487,7 +487,7 @@ async function onOpenConspect(): Promise<void> {
   if (!jobId) return;
   const serverUrl = normalizeUrl(serverUrlInput.value);
   await chrome.tabs.create({
-    url: `${serverUrl}/v1/jobs/${jobId}/conspect.md`,
+    url: `${serverUrl}/v1/jobs/${jobId}/conspect.html`,
     active: true,
   });
 }
