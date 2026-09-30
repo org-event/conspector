@@ -1,11 +1,22 @@
 {
   "manifest_version": 3,
   "name": "Conspector",
-  "version": "0.1.3",
+  "version": "0.1.11",
   "permissions": ["storage", "tabs", "tabCapture", "activeTab", "offscreen", "scripting"],
   "host_permissions": ["http://127.0.0.1:*/*", "http://localhost:*/*"],
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_title": "Conspector",
+    "default_icon": {
+      "16": "icons/off-16.png",
+      "32": "icons/off-32.png",
+      "48": "icons/off-48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/ok-16.png",
+    "32": "icons/ok-32.png",
+    "48": "icons/ok-48.png"
   },
   "background": {
     "service_worker": "background.js",

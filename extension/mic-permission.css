@@ -1,0 +1,30 @@
+@import "./styles/theme.css";
+
+body.mic-page {
+  max-width: 440px;
+  margin: 48px auto;
+  padding: 20px;
+  font-size: 14px;
+}
+
+.mic-page__card {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+
+.mic-page h1 {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.mic-page button {
+  margin-top: 4px;
+  padding: 10px 16px;
+  font-size: 14px;
+}
+
+.mic-page .status {
+  margin-top: 14px;
+}

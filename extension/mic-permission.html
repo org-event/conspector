@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Conspector — микрофон</title>
+    <link rel="stylesheet" href="/mic-permission.css" />
+  </head>
+  <body class="mic-page">
+    <main class="mic-page__card">
+      <h1>Доступ к микрофону</h1>
+      <p>
+        Conspector пишет звук вкладки <strong>и ваш микрофон</strong>, иначе в конференции
+        пропадёт ваша речь. Нажмите кнопку и разрешите доступ в диалоге Chrome.
+      </p>
+      <button id="grant" type="button">Разрешить микрофон</button>
+      <div id="status" class="status" role="status">Ожидание…</div>
+    </main>
+    <script type="module" src="/mic-permission.ts"></script>
+  </body>
+</html>

@@ -8,6 +8,8 @@ export type RecordingSession = {
   startedAtIso: string;
   startedAtMs: number;
   phase: RecordingPhase;
+  /** Mic feed muted in the mix (tab audio keeps recording). */
+  micMuted?: boolean;
   jobId?: string;
   jobStatus?: string;
   error?: string;
@@ -24,8 +26,10 @@ export type BgMessage =
       language: string;
     }
   | { type: "STOP_RECORDING" }
+  | { type: "SET_MIC_MUTED"; muted: boolean }
   | { type: "GET_STATE" }
-  | { type: "CLEAR_SESSION" };
+  | { type: "CLEAR_SESSION" }
+  | { type: "SET_SERVER_OK"; ok: boolean };
 
 export type BgResponse =
   | { ok: true; session: RecordingSession | null }

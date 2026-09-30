@@ -1,7 +1,8 @@
+import { setActionIcon, syncIconFromSession } from "./lib/icon";
 import { SESSION_KEY, type BgMessage, type BgResponse, type RecordingSession } from "./lib/types";
 
 const OFFSCREEN_URL = "offscreen.html";
-const OFFSCREEN_REASONS: chrome.offscreen.Reason[] = ["USER_MEDIA"];
+const OFFSCREEN_REASONS: chrome.offscreen.Reason[] = [chrome.offscreen.Reason.USER_MEDIA];
 
 async function readSession(): Promise<RecordingSession | null> {
   const stored = await chrome.storage.session.get(SESSION_KEY);
@@ -15,6 +16,7 @@ async function writeSession(session: RecordingSession | null): Promise<void> {
   } else {
     await chrome.storage.session.remove(SESSION_KEY);
   }
+  await syncIconFromSession();
 }
 
 async function pingOffscreen(): Promise<boolean> {
@@ -69,6 +71,7 @@ async function sessionStarted(
     startedAtIso: new Date().toISOString(),
     startedAtMs: Date.now(),
     phase: "recording",
+    micMuted: false,
   };
   await writeSession(session);
   await chrome.storage.session.set({
@@ -77,13 +80,39 @@ async function sessionStarted(
       language: msg.language,
     },
   });
+  await setActionIcon("rec");
+  return { ok: true, session };
+}
+
+async function setMicMuted(muted: boolean): Promise<BgResponse> {
+  const session = await readSession();
+  if (!session || session.phase !== "recording") {
+    return { ok: false, error: "Микрофон можно переключать только во время записи" };
+  }
+  const result = await chrome.runtime.sendMessage({
+    type: "OFFSCREEN_SET_MIC_MUTED",
+    muted,
+  });
+  if (!result?.ok) {
+    return { ok: false, error: result?.error || "Не удалось переключить микрофон" };
+  }
+  session.micMuted = Boolean(result.micMuted ?? muted);
+  await writeSession(session);
   return { ok: true, session };
 }
 
 async function stopRecording(): Promise<BgResponse> {
   const session = await readSession();
-  if (!session || session.phase !== "recording") {
+  if (!session || (session.phase !== "recording" && session.phase !== "uploading")) {
     return { ok: false, error: "Нет активной записи" };
+  }
+
+  // Stuck upload recovery: clear without re-sending audio.
+  if (session.phase === "uploading") {
+    await chrome.runtime.sendMessage({ type: "OFFSCREEN_STOP" }).catch(() => undefined);
+    await writeSession(null);
+    await chrome.storage.session.remove("pendingUpload");
+    return { ok: false, error: "Загрузка сброшена — попробуйте записать снова" };
   }
 
   const pending = await chrome.storage.session.get("pendingUpload");
@@ -94,29 +123,9 @@ async function stopRecording(): Promise<BgResponse> {
 
   session.phase = "uploading";
   await writeSession(session);
-
-  const stopped = await chrome.runtime.sendMessage({ type: "OFFSCREEN_STOP" });
-  if (!stopped?.ok) {
-    session.phase = "error";
-    session.error = stopped?.error || "Не удалось остановить запись";
-    await writeSession(session);
-    return { ok: false, error: session.error };
-  }
-
-  const size = Number(stopped.size || 0);
-  const byteList = stopped.bytes as number[] | undefined;
-  if (!size || !byteList?.length) {
-    session.phase = "error";
-    session.error = "Пустая запись: нет аудиоданных (вкладка без звука?)";
-    await writeSession(session);
-    return { ok: false, error: session.error };
-  }
+  await setActionIcon("rec");
 
   const durationSec = Math.max(0, (Date.now() - session.startedAtMs) / 1000);
-  const audioBlob = new Blob([new Uint8Array(byteList)], {
-    type: stopped.mimeType || "audio/webm",
-  });
-  const speakersBlob = new Blob([""], { type: "application/x-ndjson" });
   const meta = JSON.stringify({
     sessionId: session.sessionId,
     startedAtIso: session.startedAtIso,
@@ -126,41 +135,52 @@ async function stopRecording(): Promise<BgResponse> {
     language: uploadMeta.language || "ru",
   });
 
-  try {
-    const form = new FormData();
-    form.append("audio", audioBlob, "meeting.webm");
-    form.append("speakers", speakersBlob, "speakers.jsonl");
-    form.append("meta", meta);
-
-    const response = await fetch(`${uploadMeta.serverUrl}/v1/jobs`, {
-      method: "POST",
-      body: form,
-    });
-    if (!response.ok) {
-      throw new Error(`Сервер вернул ${response.status}`);
-    }
-    const body = (await response.json()) as { id?: string; status?: string };
-    if (!body.id) {
-      throw new Error("Сервер не вернул id job");
-    }
-    session.phase = "done";
-    session.jobId = body.id;
-    session.jobStatus = body.status || "queued";
-    session.error = undefined;
-    await writeSession(session);
-    await chrome.storage.session.remove("pendingUpload");
-    return { ok: true, session };
-  } catch (error) {
+  // Upload happens inside offscreen (Blob/FormData) — never Array.from(audio) via messaging.
+  const stopped = await chrome.runtime.sendMessage({
+    type: "OFFSCREEN_STOP",
+    serverUrl: uploadMeta.serverUrl,
+    meta,
+  });
+  if (!stopped?.ok) {
+    const error = stopped?.error || "Не удалось остановить запись / загрузить";
     session.phase = "error";
-    session.error = error instanceof Error ? error.message : String(error);
+    session.error = error;
     await writeSession(session);
-    return { ok: false, error: session.error };
+    return { ok: false, error };
   }
+
+  session.phase = "done";
+  session.jobId = stopped.jobId as string;
+  session.jobStatus = (stopped.jobStatus as string) || "queued";
+  session.error = undefined;
+  await writeSession(session);
+  await chrome.storage.session.remove("pendingUpload");
+  return { ok: true, session };
 }
+
+chrome.runtime.onInstalled.addListener(() => {
+  void setActionIcon("off");
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void syncIconFromSession();
+});
+
+void syncIconFromSession();
 
 chrome.runtime.onMessage.addListener((message: BgMessage, _sender, sendResponse) => {
   const reply = (response: BgResponse) => sendResponse(response);
 
+  if (message?.type === "SET_SERVER_OK") {
+    void chrome.storage.session
+      .set({ serverOk: message.ok })
+      .then(() => syncIconFromSession())
+      .then(() => reply({ ok: true, session: null }))
+      .catch((error: unknown) =>
+        reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+      );
+    return true;
+  }
   if (message?.type === "ENSURE_OFFSCREEN") {
     ensureOffscreen()
       .then(() => reply({ ok: true, session: null }))
@@ -195,6 +215,14 @@ chrome.runtime.onMessage.addListener((message: BgMessage, _sender, sendResponse)
   }
   if (message?.type === "STOP_RECORDING") {
     stopRecording()
+      .then(reply)
+      .catch((error: unknown) =>
+        reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+      );
+    return true;
+  }
+  if (message?.type === "SET_MIC_MUTED") {
+    setMicMuted(Boolean(message.muted))
       .then(reply)
       .catch((error: unknown) =>
         reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),

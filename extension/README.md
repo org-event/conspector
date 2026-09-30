@@ -1,12 +1,26 @@
 # Conspector — Chrome-расширение
 
-Прототип: запись аудио вкладки встречи + отправка на локальный сервер Conspector.
-Popup хранит адрес сервера, показывает цель захвата, Старт/Стоп и статус job.
+Прототип: запись аудио вкладки встречи + микрофон, отправка на локальный сервер Conspector.
+Работает в **Chrome / Chromium на macOS, Linux и Windows**.
+
+## Если нет Bun
+
+Нужен [Bun](https://bun.sh) 1.1+ (`bun --version`).
+
+| ОС | Установка |
+|---|---|
+| **macOS / Linux** | `curl -fsSL https://bun.sh/install \| bash` затем переоткройте терминал |
+| **Windows** | `powershell -c "irm bun.sh/install.ps1 \| iex"` (PowerShell) |
+
+Альтернатива: скачать бинарник с [bun.sh](https://bun.sh). Проверка: `bun --version`.
+
+Node.js **не обязателен**, если есть Bun.
 
 ## Требования
 
-- [Bun](https://bun.sh) 1.1+
-- Chrome (или любой Chromium)
+- Bun 1.1+
+- Chrome (или Chromium / Edge на базе Chromium)
+- Запущенный локальный сервер (см. `server/README.md`)
 
 ## Установка и сборка
 
@@ -17,25 +31,25 @@ bun install
 bun run build
 ```
 
-`.env` не коммитится (см. корневой `.gitignore`). Шаблон — `.env.example`.
-Адрес сервера после сохранения живёт в `chrome.storage`; `VITE_DEFAULT_SERVER_URL` — только дефолт при первой сборке.
-Результат — каталог `extension/dist/` (`popup.html`, `background.js`, `offscreen.html`, `manifest.json`).
+На Windows те же команды в PowerShell / cmd, если Bun в PATH.
+
+`.env` не коммитится. Шаблон — `.env.example`.
+Результат — `extension/dist/` (`popup.html`, `background.js`, `offscreen.html`, `manifest.json`, `icons/`).
 
 ## Загрузка в Chrome
 
-1. Откройте `chrome://extensions`.
-2. Включите «Режим разработчика».
-3. «Загрузить нераспакованное» → выберите `extension/dist`.
+1. `chrome://extensions` (в Edge: `edge://extensions`).
+2. «Режим разработчика».
+3. «Загрузить нераспакованное» → каталог `extension/dist`.
 
 ## Использование
 
-1. Запустите локальный сервер (см. `server/README.md`).
-2. Откройте вкладку встречи **http(s)** со звуком (не `chrome://`).
-3. Кликните иконку Conspector.
-4. Укажите адрес сервера; в списке **«Вкладка для записи»** выберите нужную вкладку (не обязательно активную).
-5. Опционально задайте фильтр URL (подстрока).
-6. **Старт** → запись аудио выбранной вкладки; **Стоп** → upload job.
+1. Запустите сервер (`server/README.md`).
+2. Вкладка встречи **http(s)** со звуком (не `chrome://`).
+3. Иконка Conspector (зелёная = сервер ок, красная = запись, серая = сервер недоступен).
+4. Выберите вкладку в списке, при необходимости фильтр URL.
+5. **Старт** → при первом разе вкладка «Доступ к микрофону» → **Разрешить** → снова **Старт**.
+6. **Стоп** → upload; сервер сам: Whisper → Qwen → `conspect.md`.
+7. Кнопка **«Открыть конспект.md»** когда job `done`.
 
-Пока запись идёт, цель зафиксирована. Спикеры / посекундный `speakers.jsonl` — milestone D (сейчас файл пустой).
-
-Если Старт серый — смотрите текст под кнопками (сервер / вкладка / фильтр). После правок кода: Reload расширения на `chrome://extensions`.
+После правок кода: `bun run build` и **Reload** расширения на `chrome://extensions`.

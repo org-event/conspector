@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
@@ -16,6 +16,7 @@ export default defineConfig({
       input: {
         popup: resolve(rootDir, "popup.html"),
         offscreen: resolve(rootDir, "offscreen.html"),
+        "mic-permission": resolve(rootDir, "mic-permission.html"),
         background: resolve(rootDir, "background.ts"),
       },
       output: {
@@ -35,6 +36,7 @@ export default defineConfig({
       closeBundle() {
         mkdirSync("dist", { recursive: true });
         copyFileSync("manifest.json", "dist/manifest.json");
+        cpSync("icons", "dist/icons", { recursive: true });
       },
     },
   ],

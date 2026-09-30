@@ -4,34 +4,82 @@ const DEFAULT_SERVER_URL =
   (import.meta.env.VITE_DEFAULT_SERVER_URL as string | undefined)?.trim() ||
   "http://127.0.0.1:8765";
 
-const serverUrlInput = document.getElementById("serverUrl") as HTMLInputElement;
-const patternInput = document.getElementById("captureUrlPattern") as HTMLInputElement;
-const tabSelect = document.getElementById("tabSelect") as HTMLSelectElement;
-const saveButton = document.getElementById("save") as HTMLButtonElement;
-const refreshTabsButton = document.getElementById("refreshTabs") as HTMLButtonElement;
-const startButton = document.getElementById("start") as HTMLButtonElement;
-const stopButton = document.getElementById("stop") as HTMLButtonElement;
-const serverStatus = document.getElementById("serverStatus") as HTMLDivElement;
-const recStatus = document.getElementById("recStatus") as HTMLDivElement;
-const jobStatus = document.getElementById("jobStatus") as HTMLDivElement;
-const targetTitle = document.getElementById("targetTitle") as HTMLDivElement;
-const targetUrl = document.getElementById("targetUrl") as HTMLDivElement;
+type StatusKind = "pending" | "ok" | "bad" | "";
+
+function $(id: string): HTMLElement {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`Missing #${id}`);
+  return el;
+}
+
+function $input(id: string): HTMLInputElement {
+  return $(id) as HTMLInputElement;
+}
+
+function $button(id: string): HTMLButtonElement {
+  return $(id) as HTMLButtonElement;
+}
+
+function $select(id: string): HTMLSelectElement {
+  return $(id) as HTMLSelectElement;
+}
+
+const serverUrlInput = $input("serverUrl");
+const patternInput = $input("captureUrlPattern");
+const tabSelect = $select("tabSelect");
+const saveButton = $button("save");
+const refreshTabsButton = $button("refreshTabs");
+const startButton = $button("start");
+const stopButton = $button("stop");
+const micToggleButton = $button("micToggle");
+const openConspectButton = $button("openConspect");
+const serverStatus = $("serverStatus");
+const recStatus = $("recStatus");
+const jobStatus = $("jobStatus");
+const targetTitle = $("targetTitle");
+const targetUrl = $("targetUrl");
 
 type Target = { tabId: number; pageUrl: string; pageTitle: string };
 
 let selectedTarget: Target | null = null;
 let serverOk = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let lastJobId: string | null = null;
+
+function jobStatusLabel(status: string): string {
+  switch (status) {
+    case "queued":
+      return "в очереди на сервере";
+    case "transcribing":
+      return "Whisper: речь → текст";
+    case "summarizing":
+      return "Qwen: текст → конспект (LAN)";
+    case "done":
+      return "готово — можно открыть conspect.md";
+    case "error":
+      return "ошибка на сервере";
+    default:
+      return status;
+  }
+}
+
+function setStatus(el: HTMLElement, kind: StatusKind, text: string): void {
+  el.textContent = text;
+  el.className = kind ? `status status--${kind}` : "status";
+}
+
+function setConspectAvailable(jobId: string | null, ready: boolean): void {
+  lastJobId = jobId;
+  openConspectButton.disabled = !ready || !jobId;
+  if (jobId) {
+    void chrome.storage.local.set({ lastJobId: jobId, lastJobReady: ready });
+  }
+}
 
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return DEFAULT_SERVER_URL;
   return trimmed.replace(/\/+$/, "");
-}
-
-function setBadge(el: HTMLElement, kind: "pending" | "ok" | "bad" | "", text: string): void {
-  el.textContent = text;
-  el.className = kind;
 }
 
 async function sendBg(message: unknown): Promise<BgResponse> {
@@ -42,20 +90,30 @@ function isCapturableUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
+function patternMatches(pattern: string, url: string): boolean {
+  const p = pattern.trim();
+  if (!p) return true;
+  return url.includes(p);
+}
+
 async function checkHealth(serverUrl: string): Promise<boolean> {
-  setBadge(serverStatus, "pending", "Проверка сервера…");
+  setStatus(serverStatus, "pending", "Проверка сервера…");
   try {
     const response = await fetch(`${serverUrl}/health`);
     if (!response.ok) throw new Error(String(response.status));
     const body = await response.json();
-    if (body?.ok) {
-      setBadge(serverStatus, "ok", "Сервер доступен");
+    const ok = Boolean(body?.ok);
+    if (ok) {
+      setStatus(serverStatus, "ok", "Сервер доступен");
+      await sendBg({ type: "SET_SERVER_OK", ok: true });
       return true;
     }
-    setBadge(serverStatus, "bad", "Сервер недоступен");
+    setStatus(serverStatus, "bad", "Сервер недоступен");
+    await sendBg({ type: "SET_SERVER_OK", ok: false });
     return false;
   } catch {
-    setBadge(serverStatus, "bad", "Сервер недоступен — запустите uvicorn");
+    setStatus(serverStatus, "bad", "Сервер недоступен — запустите uvicorn");
+    await sendBg({ type: "SET_SERVER_OK", ok: false });
     return false;
   }
 }
@@ -70,13 +128,7 @@ function renderTarget(target: Target | null, locked: boolean): void {
   targetUrl.textContent = target.pageUrl || "(нет URL)";
 }
 
-function patternMatches(pattern: string, url: string): boolean {
-  const p = pattern.trim();
-  if (!p) return true;
-  return url.includes(p);
-}
-
-function syncStartEnabled(recording: boolean, uploading: boolean): void {
+function startBlockReasons(): string[] {
   const reason: string[] = [];
   if (!serverOk) reason.push("сервер недоступен");
   if (!selectedTarget) reason.push("не выбрана вкладка");
@@ -90,12 +142,18 @@ function syncStartEnabled(recording: boolean, uploading: boolean): void {
   ) {
     reason.push("URL не совпал с фильтром");
   }
+  return reason;
+}
 
+function syncStartEnabled(recording: boolean, uploading: boolean): void {
+  const reason = startBlockReasons();
   const blocked = reason.length > 0;
   startButton.disabled = recording || uploading || blocked;
-  startButton.title = blocked ? `Старт недоступен: ${reason.join(", ")}` : "Начать запись выбранной вкладки";
+  startButton.title = blocked
+    ? `Старт недоступен: ${reason.join(", ")}`
+    : "Начать запись выбранной вкладки";
   if (!recording && !uploading && blocked) {
-    setBadge(recStatus, "", `Старт недоступен: ${reason.join(", ")}`);
+    setStatus(recStatus, "", `Старт недоступен: ${reason.join(", ")}`);
   }
 }
 
@@ -120,13 +178,12 @@ async function refreshTabList(): Promise<void> {
     const opt = document.createElement("option");
     opt.value = String(tab.id);
     const title = (tab.title || "Без названия").slice(0, 40);
-    const host = (() => {
-      try {
-        return new URL(tab.url || "").host;
-      } catch {
-        return tab.url || "";
-      }
-    })();
+    let host = tab.url || "";
+    try {
+      host = new URL(tab.url || "").host;
+    } catch {
+      /* keep raw url */
+    }
     opt.textContent = `${title} — ${host}`;
     tabSelect.appendChild(opt);
   }
@@ -144,13 +201,30 @@ async function refreshTabList(): Promise<void> {
   syncStartEnabled(false, false);
 }
 
+function syncMicToggle(session: RecordingSession | null): void {
+  const recording = session?.phase === "recording";
+  const muted = Boolean(session?.micMuted);
+  micToggleButton.disabled = !recording;
+  micToggleButton.setAttribute("aria-pressed", muted ? "true" : "false");
+  micToggleButton.textContent = muted ? "Микрофон: выкл" : "Микрофон: вкл";
+  micToggleButton.classList.toggle("mic-off", muted && recording);
+  micToggleButton.classList.toggle("secondary", !(muted && recording));
+  micToggleButton.title = recording
+    ? muted
+      ? "Сейчас микрофон не пишется — нажмите, чтобы снова включить в микс"
+      : "Нажмите, чтобы не писать ваш голос (звук вкладки останется)"
+    : "Доступно во время записи";
+}
+
 function applySessionUi(session: RecordingSession | null): void {
   const recording = session?.phase === "recording";
   const uploading = session?.phase === "uploading";
-  stopButton.disabled = !recording;
+  stopButton.disabled = !(recording || uploading);
+  stopButton.textContent = uploading ? "Сбросить" : "Стоп";
   refreshTabsButton.disabled = recording || uploading;
   tabSelect.disabled = recording || uploading;
   patternInput.disabled = recording || uploading;
+  syncMicToggle(session);
 
   if (session && (recording || uploading || session.phase === "done" || session.phase === "error")) {
     selectedTarget = {
@@ -167,29 +241,35 @@ function applySessionUi(session: RecordingSession | null): void {
 
   if (!session || session.phase === "idle") {
     if (startButton.disabled) return;
-    setBadge(recStatus, "", "Не записывает");
+    setStatus(recStatus, "", "Не записывает");
     jobStatus.hidden = true;
     return;
   }
   if (session.phase === "recording") {
-    setBadge(recStatus, "ok", "Идёт запись…");
+    setStatus(
+      recStatus,
+      "ok",
+      session.micMuted ? "Идёт запись… (микрофон выкл)" : "Идёт запись…",
+    );
     jobStatus.hidden = true;
     return;
   }
   if (session.phase === "uploading") {
-    setBadge(recStatus, "pending", "Остановка и загрузка…");
+    setStatus(recStatus, "pending", "Остановка и загрузка…");
     jobStatus.hidden = true;
     return;
   }
   if (session.phase === "error") {
-    setBadge(recStatus, "bad", session.error || "Ошибка записи");
+    setStatus(recStatus, "bad", session.error || "Ошибка записи");
     jobStatus.hidden = true;
     return;
   }
   if (session.phase === "done" && session.jobId) {
-    setBadge(recStatus, "ok", "Запись отправлена");
+    setStatus(recStatus, "ok", "Запись на сервере — идёт/ждёт обработка");
     jobStatus.hidden = false;
-    jobStatus.textContent = `Job ${session.jobId}: ${session.jobStatus || "queued"}`;
+    jobStatus.className = "status";
+    jobStatus.textContent = `Job ${session.jobId}: ${jobStatusLabel(session.jobStatus || "queued")}`;
+    setConspectAvailable(session.jobId, session.jobStatus === "done");
     startJobPolling(normalizeUrl(serverUrlInput.value), session.jobId);
   }
 }
@@ -197,7 +277,7 @@ function applySessionUi(session: RecordingSession | null): void {
 async function refreshState(): Promise<void> {
   const response = await sendBg({ type: "GET_STATE" });
   if (!response.ok) {
-    setBadge(recStatus, "bad", response.error);
+    setStatus(recStatus, "bad", response.error);
     return;
   }
   applySessionUi(response.session);
@@ -214,6 +294,22 @@ async function saveSettings(): Promise<void> {
   await refreshState();
 }
 
+async function micPermissionState(): Promise<PermissionState | "unknown"> {
+  try {
+    const status = await navigator.permissions.query({
+      name: "microphone" as PermissionName,
+    });
+    return status.state;
+  } catch {
+    return "unknown";
+  }
+}
+
+async function openMicPermissionPage(): Promise<void> {
+  const url = chrome.runtime.getURL("mic-permission.html");
+  await chrome.tabs.create({ url, active: true });
+}
+
 async function onStart(): Promise<void> {
   const serverUrl = normalizeUrl(serverUrlInput.value);
   serverUrlInput.value = serverUrl;
@@ -224,22 +320,22 @@ async function onStart(): Promise<void> {
 
   serverOk = await checkHealth(serverUrl);
   if (!serverOk) {
-    setBadge(recStatus, "bad", "Сервер недоступен — запись не начата");
+    setStatus(recStatus, "bad", "Сервер недоступен — запись не начата");
     syncStartEnabled(false, false);
     return;
   }
 
   const target = selectedTarget;
   if (!target) {
-    setBadge(recStatus, "bad", "Выберите вкладку в списке");
+    setStatus(recStatus, "bad", "Выберите вкладку в списке");
     return;
   }
   if (!isCapturableUrl(target.pageUrl)) {
-    setBadge(recStatus, "bad", "Нельзя захватывать chrome:// и служебные страницы");
+    setStatus(recStatus, "bad", "Нельзя захватывать chrome:// и служебные страницы");
     return;
   }
   if (!patternMatches(patternInput.value, target.pageUrl)) {
-    setBadge(
+    setStatus(
       recStatus,
       "bad",
       `URL не содержит фильтр «${patternInput.value.trim()}» — смените вкладку или фильтр`,
@@ -247,10 +343,26 @@ async function onStart(): Promise<void> {
     return;
   }
 
-  setBadge(recStatus, "pending", "Подготовка offscreen…");
+  setStatus(recStatus, "pending", "Проверка микрофона…");
+  // Never call getUserMedia from the popup: Chrome closes it when the permission
+  // dialog opens → "Permission dismissed".
+  const micState = await micPermissionState();
+  if (micState !== "granted") {
+    await openMicPermissionPage();
+    setStatus(
+      recStatus,
+      "bad",
+      micState === "denied"
+        ? "Микрофон запрещён. Разрешите его на открывшейся странице (или в настройках Chrome) и снова нажмите Старт."
+        : "Открылась вкладка «Доступ к микрофону». Нажмите «Разрешить», закройте её и снова Старт.",
+    );
+    return;
+  }
+
+  setStatus(recStatus, "pending", "Подготовка offscreen…");
   const ready = await sendBg({ type: "ENSURE_OFFSCREEN" });
   if (!ready.ok) {
-    setBadge(recStatus, "bad", ready.error);
+    setStatus(recStatus, "bad", ready.error);
     return;
   }
 
@@ -258,7 +370,7 @@ async function onStart(): Promise<void> {
   try {
     streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: target.tabId });
   } catch (error) {
-    setBadge(
+    setStatus(
       recStatus,
       "bad",
       `Отказ в захвате: ${error instanceof Error ? error.message : String(error)}`,
@@ -266,14 +378,13 @@ async function onStart(): Promise<void> {
     return;
   }
 
-  setBadge(recStatus, "pending", "Запуск MediaRecorder…");
-  // Speak to offscreen immediately (same user-gesture chain as getMediaStreamId).
+  setStatus(recStatus, "pending", "Запуск записи (вкладка + микрофон)…");
   const started = await chrome.runtime.sendMessage({
     type: "OFFSCREEN_START",
     streamId,
   });
   if (!started?.ok) {
-    setBadge(recStatus, "bad", started?.error || "Не удалось начать захват аудио");
+    setStatus(recStatus, "bad", started?.error || "Не удалось начать захват аудио");
     return;
   }
 
@@ -286,7 +397,7 @@ async function onStart(): Promise<void> {
     language: "ru",
   });
   if (!sessionResp.ok) {
-    setBadge(recStatus, "bad", sessionResp.error);
+    setStatus(recStatus, "bad", sessionResp.error);
     await chrome.runtime.sendMessage({ type: "OFFSCREEN_STOP" }).catch(() => undefined);
     return;
   }
@@ -294,11 +405,16 @@ async function onStart(): Promise<void> {
 }
 
 async function onStop(): Promise<void> {
-  setBadge(recStatus, "pending", "Остановка…");
+  const before = await sendBg({ type: "GET_STATE" });
+  if (before.ok && before.session?.phase === "uploading") {
+    setStatus(recStatus, "pending", "Сброс зависшей загрузки…");
+  } else {
+    setStatus(recStatus, "pending", "Остановка и загрузка…");
+  }
   stopButton.disabled = true;
   const response = await sendBg({ type: "STOP_RECORDING" });
   if (!response.ok) {
-    setBadge(recStatus, "bad", response.error);
+    setStatus(recStatus, "bad", response.error);
     await refreshState();
     return;
   }
@@ -314,31 +430,85 @@ function stopPolling(): void {
 
 function startJobPolling(serverUrl: string, jobId: string): void {
   stopPolling();
+  setConspectAvailable(jobId, false);
   const tick = async () => {
     try {
       const response = await fetch(`${serverUrl}/v1/jobs/${jobId}`);
       if (!response.ok) throw new Error(String(response.status));
       const body = await response.json();
+      const status = String(body.status || "?");
       jobStatus.hidden = false;
-      jobStatus.textContent = `Job ${jobId}: ${body.status}${body.error ? ` — ${body.error}` : ""}`;
-      if (body.status === "done" || body.status === "error") {
+      jobStatus.className = "status";
+      jobStatus.textContent = `Job ${jobId}: ${jobStatusLabel(status)}${
+        body.error ? ` — ${body.error}` : ""
+      }`;
+      if (status === "done") {
+        setStatus(recStatus, "ok", "Конспект готов (сервер: Whisper → Qwen)");
+        setConspectAvailable(jobId, true);
         stopPolling();
+      } else if (status === "error") {
+        setStatus(recStatus, "bad", body.error || "Ошибка обработки на сервере");
+        setConspectAvailable(jobId, false);
+        stopPolling();
+      } else if (status === "transcribing") {
+        setStatus(recStatus, "pending", "Сервер: распознавание речи (Whisper)…");
+      } else if (status === "summarizing") {
+        setStatus(recStatus, "pending", "Сервер: конспект через Qwen…");
       }
     } catch (error) {
       jobStatus.hidden = false;
-      jobStatus.textContent = `Job ${jobId}: ошибка опроса (${error instanceof Error ? error.message : String(error)})`;
+      jobStatus.className = "status status--bad";
+      jobStatus.textContent = `Job ${jobId}: ошибка опроса (${
+        error instanceof Error ? error.message : String(error)
+      })`;
     }
   };
   void tick();
   pollTimer = setInterval(() => void tick(), 2500);
 }
 
+async function onMicToggle(): Promise<void> {
+  const before = await sendBg({ type: "GET_STATE" });
+  if (!before.ok || before.session?.phase !== "recording") {
+    setStatus(recStatus, "bad", "Микрофон можно переключать только во время записи");
+    return;
+  }
+  const nextMuted = !before.session.micMuted;
+  const response = await sendBg({ type: "SET_MIC_MUTED", muted: nextMuted });
+  if (!response.ok) {
+    setStatus(recStatus, "bad", response.error);
+    return;
+  }
+  applySessionUi(response.session);
+}
+
+async function onOpenConspect(): Promise<void> {
+  const jobId = lastJobId;
+  if (!jobId) return;
+  const serverUrl = normalizeUrl(serverUrlInput.value);
+  await chrome.tabs.create({
+    url: `${serverUrl}/v1/jobs/${jobId}/conspect.md`,
+    active: true,
+  });
+}
+
 async function init(): Promise<void> {
-  const stored = await chrome.storage.local.get(["serverUrl", "captureUrlPattern"]);
+  const stored = await chrome.storage.local.get([
+    "serverUrl",
+    "captureUrlPattern",
+    "lastJobId",
+    "lastJobReady",
+  ]);
   const url =
-    typeof stored.serverUrl === "string" && stored.serverUrl ? stored.serverUrl : DEFAULT_SERVER_URL;
+    typeof stored.serverUrl === "string" && stored.serverUrl
+      ? stored.serverUrl
+      : DEFAULT_SERVER_URL;
   serverUrlInput.value = url;
-  patternInput.value = typeof stored.captureUrlPattern === "string" ? stored.captureUrlPattern : "";
+  patternInput.value =
+    typeof stored.captureUrlPattern === "string" ? stored.captureUrlPattern : "";
+  if (typeof stored.lastJobId === "string" && stored.lastJobId) {
+    setConspectAvailable(stored.lastJobId, Boolean(stored.lastJobReady));
+  }
   serverOk = await checkHealth(url);
   await refreshTabList();
   await refreshState();
@@ -368,4 +538,6 @@ patternInput.addEventListener("change", () => {
 refreshTabsButton.addEventListener("click", () => void refreshTabList());
 startButton.addEventListener("click", () => void onStart());
 stopButton.addEventListener("click", () => void onStop());
-init();
+micToggleButton.addEventListener("click", () => void onMicToggle());
+openConspectButton.addEventListener("click", () => void onOpenConspect());
+void init();

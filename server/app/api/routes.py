@@ -4,9 +4,11 @@ import threading
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from app.config import settings
 from app.services.asr import is_model_loaded, segments_to_transcript_text, transcribe_file
+from app.services.conspect_md import write_conspect_md
 from app.services.jobs import store
 from app.services.summarize import summarize_transcript
 
@@ -39,6 +41,12 @@ def run_job_pipeline(job_id: str) -> None:
 
             store.update(job_id, status="summarizing", progress=0.7)
             summary = summarize_transcript(transcript_text)
+            write_conspect_md(
+                job_dir,
+                job_id=job_id,
+                transcript_text=transcript_text,
+                summary=summary,
+            )
             store.update(
                 job_id,
                 status="done",
@@ -83,3 +91,41 @@ def get_job(job_id: str) -> dict:
         "progress": job.progress,
         "result": job.result,
     }
+
+
+@router.get("/v1/jobs/{job_id}/conspect.md")
+def get_conspect_markdown(job_id: str):
+    """Download meeting notes: from disk, or build from in-memory job result."""
+    job_dir = Path(settings.data_dir) / "jobs" / job_id
+    path = job_dir / "conspect.md"
+    job = store.get(job_id)
+
+    # Prefer existing file (survives server restart).
+    if path.exists() and path.stat().st_size > 0:
+        return FileResponse(
+            path,
+            media_type="text/markdown; charset=utf-8",
+            filename=f"{job_id}-conspect.md",
+        )
+
+    if job is not None and job.status == "done" and job.result:
+        result = job.result or {}
+        write_conspect_md(
+            job_dir,
+            job_id=job_id,
+            transcript_text=str(result.get("transcriptText") or ""),
+            summary=str(result.get("summary") or ""),
+        )
+        if path.exists():
+            return FileResponse(
+                path,
+                media_type="text/markdown; charset=utf-8",
+                filename=f"{job_id}-conspect.md",
+            )
+
+    if not (job_dir / "audio.webm").exists() and job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    raise HTTPException(
+        status_code=409,
+        detail="Конспект ещё не готов (или сервер перезапускали до записи файла)",
+    )

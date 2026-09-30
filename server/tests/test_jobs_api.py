@@ -106,6 +106,20 @@ def test_job_reaches_done_with_asr_transcript():
     assert "Привет команда" in body["result"]["transcriptText"]
     assert body["result"]["summary"].startswith("MOCK_SUMMARY:")
 
+    md_path = Path(settings.data_dir) / "jobs" / job_id / "conspect.md"
+    assert md_path.exists()
+    md = client.get(f"/v1/jobs/{job_id}/conspect.md")
+    assert md.status_code == 200
+    assert "Привет команда" in md.text
+    assert "MOCK_SUMMARY" in md.text
+
+
+def test_conspect_md_before_done_returns_409():
+    client = TestClient(app)
+    job = store.create()
+    r = client.get(f"/v1/jobs/{job.id}/conspect.md")
+    assert r.status_code == 409
+
 
 def test_job_asr_error_becomes_error_status(monkeypatch):
     def boom(_path):
