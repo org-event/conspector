@@ -31,9 +31,9 @@ def test_defaults(clean_env):
     s = Settings(_env_file=None)
     assert s.host == "127.0.0.1"
     assert s.port == 8765
-    assert s.asr_model == "small"
+    assert s.asr_model == "gigaam-v3-e2e-rnnt"
     assert s.asr_device == "cpu"
-    assert s.asr_compute_type == "int8"
+    assert s.asr_compute_type == ""
     assert s.asr_language == "ru"
     assert s.asr_vad_filter is True
     assert s.asr_warmup is False
@@ -46,13 +46,13 @@ def test_defaults(clean_env):
 
 def test_env_override(clean_env, monkeypatch):
     monkeypatch.setenv("PORT", "9999")
-    monkeypatch.setenv("ASR_MODEL", "medium")
+    monkeypatch.setenv("ASR_MODEL", "gigaam-v3-e2e-ctc")
     monkeypatch.setenv("OLLAMA_MODEL", "qwen:27b")
     monkeypatch.setenv("OLLAMA_URL", "http://example.local/v1")
     monkeypatch.setenv("DATA_DIR", "/tmp/conspector-data")
     s = Settings(_env_file=None)
     assert s.port == 9999
-    assert s.asr_model == "medium"
+    assert s.asr_model == "gigaam-v3-e2e-ctc"
     assert s.ollama_model == "qwen:27b"
     assert s.ollama_url == "http://example.local/v1"
     assert s.data_dir == "/tmp/conspector-data"

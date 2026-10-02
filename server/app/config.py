@@ -21,9 +21,11 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8765
 
-    asr_model: str = "small"
+    # onnx-asr model name, e.g. gigaam-v3-e2e-rnnt (punctuation + case).
+    asr_model: str = "gigaam-v3-e2e-rnnt"
     asr_device: str = "cpu"
-    asr_compute_type: str = "int8"
+    # onnx quantization: "" | int8 | fp16. Empty = full precision (best quality).
+    asr_compute_type: str = ""
     asr_language: str = "ru"
     asr_vad_filter: bool = True
     asr_warmup: bool = False

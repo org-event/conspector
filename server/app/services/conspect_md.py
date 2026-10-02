@@ -5,8 +5,39 @@ from __future__ import annotations
 import html
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def format_duration_hms(duration_sec: Any) -> str:
+    """Format seconds as H:MM:SS (local-facing; no fractional seconds)."""
+    try:
+        total = int(round(float(duration_sec)))
+    except (TypeError, ValueError):
+        return "—"
+    if total < 0:
+        total = 0
+    hours, rem = divmod(total, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+
+def format_started_local(started_iso: Any) -> str:
+    """ISO start → wall clock on this machine, without timezone suffix."""
+    if started_iso is None or started_iso == "":
+        return "—"
+    raw = str(started_iso).strip()
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone()
+        return local.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return str(started_iso)
 
 
 def build_conspect_markdown(
@@ -18,8 +49,8 @@ def build_conspect_markdown(
 ) -> str:
     title = str(meta.get("title") or "Встреча")
     page_url = meta.get("pageUrl") or "—"
-    duration = meta.get("durationSec", "—")
-    started = meta.get("startedAtIso") or "—"
+    duration = format_duration_hms(meta.get("durationSec", "—"))
+    started = format_started_local(meta.get("startedAtIso") or "—")
     language = meta.get("language") or "ru"
     body_summary = (summary or "").strip() or "_нет_"
     body_transcript = (transcript_text or "").strip() or "_пусто_"
@@ -38,7 +69,7 @@ def build_conspect_markdown(
         f"# Конспект: {title}\n\n"
         f"- **Job:** `{job_id}`\n"
         f"- **URL:** {page_url}\n"
-        f"- **Длительность:** {duration} с\n"
+        f"- **Длительность:** {duration}\n"
         f"- **Начало:** {started}\n"
         f"- **Язык:** {language}\n\n"
         f"## Резюме (LLM)\n\n"
@@ -82,8 +113,8 @@ def build_conspect_html(
 ) -> str:
     title = str(meta.get("title") or "Встреча")
     page_url = str(meta.get("pageUrl") or "—")
-    duration = meta.get("durationSec", "—")
-    started = str(meta.get("startedAtIso") or "—")
+    duration = format_duration_hms(meta.get("durationSec", "—"))
+    started = format_started_local(meta.get("startedAtIso") or "—")
     language = str(meta.get("language") or "ru")
     body_transcript = (transcript_text or "").strip() or "—"
     safe_title = html.escape(title)
@@ -168,7 +199,7 @@ def build_conspect_html(
     <ul class="meta">
       <li><strong>Job:</strong> <code>{html.escape(job_id)}</code></li>
       <li><strong>URL:</strong> {link}</li>
-      <li><strong>Длительность:</strong> {html.escape(str(duration))} с</li>
+      <li><strong>Длительность:</strong> {html.escape(duration)}</li>
       <li><strong>Начало:</strong> {html.escape(started)}</li>
       <li><strong>Язык:</strong> {html.escape(language)}</li>
     </ul>

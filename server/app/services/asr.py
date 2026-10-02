@@ -1,7 +1,9 @@
-"""faster-whisper ASR: singleton model + file transcription."""
+"""GigaAM (onnx-asr) ASR: singleton model + file transcription."""
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -23,19 +25,44 @@ def reset_model_for_tests() -> None:
         _model = None
 
 
+def _onnx_providers() -> list[str] | None:
+    """Force CPU on macOS-friendly setups; CoreML breaks GigaAM inference."""
+    if settings.asr_device.lower() == "cpu":
+        return ["CPUExecutionProvider"]
+    return None
+
+
+def _quantization() -> str | None:
+    q = (settings.asr_compute_type or "").strip().lower()
+    if q in ("int8", "fp16"):
+        return q
+    return None
+
+
 def load_model() -> Any:
-    """Load WhisperModel once per process (lazy or warmup)."""
+    """Load GigaAM via onnx-asr once per process (lazy or warmup)."""
     global _model
     with _model_lock:
         if _model is not None:
             return _model
-        from faster_whisper import WhisperModel
+        import onnx_asr
 
-        _model = WhisperModel(
-            settings.asr_model,
-            device=settings.asr_device,
-            compute_type=settings.asr_compute_type,
-        )
+        providers = _onnx_providers()
+        kwargs: dict[str, Any] = {}
+        if providers is not None:
+            kwargs["providers"] = providers
+        quant = _quantization()
+        if quant is not None:
+            kwargs["quantization"] = quant
+
+        model = onnx_asr.load_model(settings.asr_model, **kwargs)
+        if settings.asr_vad_filter:
+            vad_kwargs: dict[str, Any] = {}
+            if providers is not None:
+                vad_kwargs["providers"] = providers
+            vad = onnx_asr.load_vad("silero", **vad_kwargs)
+            model = model.with_vad(vad)
+        _model = model
         return _model
 
 
@@ -53,10 +80,52 @@ def segments_to_transcript_text(segments: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _ffmpeg_to_wav(src: Path, dst: Path) -> None:
+    """Decode any ffmpeg-readable audio to 16 kHz mono PCM WAV."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(src),
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s16le",
+        str(dst),
+    ]
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ffmpeg not found on PATH; install ffmpeg to decode meeting audio for ASR"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(f"ffmpeg failed converting {src.name}: {err[:500]}") from exc
+
+
+def ensure_wav_16k_mono(path: Path) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+    """Return a 16 kHz mono WAV path; may create a temp dir that caller must keep alive."""
+    if path.suffix.lower() == ".wav":
+        return path, None
+    tmp = tempfile.TemporaryDirectory(prefix="conspector-asr-")
+    wav = Path(tmp.name) / "audio.wav"
+    _ffmpeg_to_wav(path, wav)
+    return wav, tmp
+
+
 def transcribe_file(path: str | Path) -> list[dict[str, Any]]:
     """Transcribe an audio file into [{start, end, text}, ...].
 
     Empty file → empty list (no error). Missing file → FileNotFoundError.
+    Non-WAV inputs are converted via ffmpeg to 16 kHz mono WAV.
     """
     audio_path = Path(path)
     if not audio_path.exists():
@@ -64,22 +133,28 @@ def transcribe_file(path: str | Path) -> list[dict[str, Any]]:
     if audio_path.stat().st_size == 0:
         return []
 
-    model = load_model()
-    segments_iter, _info = model.transcribe(
-        str(audio_path),
-        language=settings.asr_language,
-        vad_filter=settings.asr_vad_filter,
-    )
-    out: list[dict[str, Any]] = []
-    for seg in segments_iter:
-        text = (seg.text or "").strip()
-        if not text:
-            continue
-        out.append(
-            {
-                "start": float(seg.start),
-                "end": float(seg.end),
-                "text": text,
-            }
-        )
-    return out
+    wav_path, tmp = ensure_wav_16k_mono(audio_path)
+    try:
+        model = load_model()
+        results = model.recognize(str(wav_path))
+        # with_vad → iterable of SegmentResult; without → plain str
+        if isinstance(results, str):
+            text = results.strip()
+            return [{"start": 0.0, "end": 0.0, "text": text}] if text else []
+
+        out: list[dict[str, Any]] = []
+        for seg in results:
+            text = (getattr(seg, "text", None) or "").strip()
+            if not text:
+                continue
+            out.append(
+                {
+                    "start": float(getattr(seg, "start", 0.0)),
+                    "end": float(getattr(seg, "end", 0.0)),
+                    "text": text,
+                }
+            )
+        return out
+    finally:
+        if tmp is not None:
+            tmp.cleanup()

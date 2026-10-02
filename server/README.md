@@ -1,9 +1,9 @@
 # Conspector — локальный сервер
 
 Прототип: FastAPI принимает запись встречи (аудио + спикеры), делает ASR
-(faster-whisper) и краткое резюме через LLM.
+(GigaAM v3 via onnx-asr) и краткое резюме через LLM.
 
-Работает на **macOS, Linux и Windows** (нужен Python 3.11+ и браузер Chromium для расширения).
+Работает на **macOS, Linux и Windows** (нужен Python 3.11+, **ffmpeg** и браузер Chromium для расширения).
 
 ## Если нет Python
 
@@ -116,13 +116,13 @@ curl -O http://127.0.0.1:8765/v1/jobs/<id>/conspect.md
 
 В редакторе Cursor/VS Code `<details>` в `.md` **не** сворачивается — это исходник. Сворачивание работает в HTML-просмотре и на GitHub.
 
-Пайплайн после upload **сам**: Whisper (речь→текст) → Qwen (конспект) → `conspect.md`.
+Пайплайн после upload **сам**: GigaAM (речь→текст) → Qwen (конспект) → `conspect.md`.
 
-## ASR (faster-whisper) — скачивается ли модель?
+## ASR (GigaAM / onnx-asr) — скачивается ли модель?
 
 **По умолчанию при старте uvicorn модель не грузится** (`ASR_WARMUP=false`).
 
-| Режим | Когда скачивается / грузится Whisper |
+| Режим | Когда скачивается / грузится GigaAM |
 |---|---|
 | **Lazy (дефолт)** | При **первой job** (этап `transcribing`). Первый раз нужен интернет — веса уходят в кэш Hugging Face. Дальше с диска. |
 | **Warmup** `ASR_WARMUP=true` | При **старте** сервера (дольше старт, зато первая job быстрее). |
@@ -139,11 +139,11 @@ curl -O http://127.0.0.1:8765/v1/jobs/<id>/conspect.md
 .venv\Scripts\python -c "from app.services.asr import load_model, is_model_loaded; load_model(); print('asrReady', is_model_loaded())"
 ```
 
-Env: `ASR_MODEL` (дефолт `small`), `ASR_DEVICE`, `ASR_COMPUTE_TYPE`, `ASR_LANGUAGE`, `ASR_VAD_FILTER`, `ASR_WARMUP`.
+Env: `ASR_MODEL` (дефолт `gigaam-v3-e2e-rnnt`), `ASR_DEVICE` (`cpu` → только CPUExecutionProvider), `ASR_COMPUTE_TYPE` (пусто = полное качество; `int8` / `fp16` — квантизация), `ASR_LANGUAGE`, `ASR_VAD_FILTER` (Silero), `ASR_WARMUP`.
 
 Одна тяжёлая ASR за раз (lock). Popup моделью не управляет.
 
-На Linux/Windows для декодирования webm обычно тянется `av`/`ffmpeg` через зависимости faster-whisper; если ASR падает на аудио — поставьте системный **ffmpeg** (`brew` / `apt` / [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) на Windows).
+Для декодирования `audio.webm` нужен системный **ffmpeg** (`brew install ffmpeg` / `apt install ffmpeg` / [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) на Windows). Сервер конвертирует в 16 kHz mono WAV перед распознаванием.
 
 ## LLM (конспект)
 
@@ -155,7 +155,7 @@ LLM может быть на другой машине в LAN (OpenAI-compatible
 
 | Часть | macOS | Linux | Windows |
 |---|---|---|---|
-| Сервер (Python / uvicorn / Whisper) | да | да | да (пути `.venv\Scripts\…`) |
+| Сервер (Python / uvicorn / GigaAM) | да | да | да (пути `.venv\Scripts\…`) |
 | Расширение Chrome | да | да | да |
 | Запись вкладки + микрофон | да | да | да (Chromium) |
 
@@ -167,7 +167,7 @@ LLM может быть на другой машине в LAN (OpenAI-compatible
 |---|---|
 | `HOST` / `PORT` | bind uvicorn |
 | `DATA_DIR` | каталог jobs |
-| `ASR_*` | faster-whisper |
+| `ASR_*` | onnx-asr / GigaAM |
 | `OLLAMA_*` / `LLM_*` | доступ к LLM |
 | `MAX_UPLOAD_MB` | лимит upload |
 

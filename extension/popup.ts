@@ -51,7 +51,7 @@ function jobStatusLabel(status: string): string {
     case "queued":
       return "в очереди на сервере";
     case "transcribing":
-      return "Whisper: речь → текст";
+      return "ASR: речь → текст";
     case "summarizing":
       return "Qwen: текст → конспект (LAN)";
     case "done":
@@ -443,7 +443,7 @@ function startJobPolling(serverUrl: string, jobId: string): void {
         body.error ? ` — ${body.error}` : ""
       }`;
       if (status === "done") {
-        setStatus(recStatus, "ok", "Конспект готов (сервер: Whisper → Qwen)");
+        setStatus(recStatus, "ok", "Конспект готов (сервер: GigaAM → LLM)");
         setConspectAvailable(jobId, true);
         stopPolling();
       } else if (status === "error") {
@@ -451,7 +451,7 @@ function startJobPolling(serverUrl: string, jobId: string): void {
         setConspectAvailable(jobId, false);
         stopPolling();
       } else if (status === "transcribing") {
-        setStatus(recStatus, "pending", "Сервер: распознавание речи (Whisper)…");
+        setStatus(recStatus, "pending", "Сервер: распознавание речи (GigaAM)…");
       } else if (status === "summarizing") {
         setStatus(recStatus, "pending", "Сервер: конспект через Qwen…");
       }

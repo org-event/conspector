@@ -1,4 +1,4 @@
-"""Unit tests for ASR helpers (mocked WhisperModel)."""
+"""Unit tests for ASR helpers (mocked onnx-asr)."""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,17 +38,16 @@ def test_transcribe_missing_file_raises(tmp_path):
 
 
 def test_transcribe_file_uses_model(tmp_path, monkeypatch):
-    audio = tmp_path / "speech.webm"
+    audio = tmp_path / "speech.wav"
     audio.write_bytes(b"not-empty")
 
     class FakeModel:
-        def transcribe(self, path, language=None, vad_filter=None):
+        def recognize(self, path):
             assert path == str(audio)
-            segs = [
+            return [
                 SimpleNamespace(start=0.0, end=1.0, text=" раз "),
                 SimpleNamespace(start=1.0, end=2.0, text="два"),
             ]
-            return segs, SimpleNamespace(language="ru")
 
     monkeypatch.setattr(asr, "load_model", lambda: FakeModel())
     out = asr.transcribe_file(audio)
@@ -59,16 +58,49 @@ def test_transcribe_file_uses_model(tmp_path, monkeypatch):
     assert asr.segments_to_transcript_text(out) == "[00:00] раз\n[00:01] два"
 
 
+def test_transcribe_webm_converts_via_ffmpeg(tmp_path, monkeypatch):
+    audio = tmp_path / "speech.webm"
+    audio.write_bytes(b"fake-webm")
+    converted = tmp_path / "converted.wav"
+    converted.write_bytes(b"wav-bytes")
+
+    calls: list[tuple[Path, Path]] = []
+
+    def fake_ffmpeg(src: Path, dst: Path) -> None:
+        calls.append((src, dst))
+        dst.write_bytes(b"wav")
+
+    class FakeModel:
+        def recognize(self, path):
+            assert Path(path).suffix == ".wav"
+            return [SimpleNamespace(start=0.5, end=1.5, text="Ок.")]
+
+    monkeypatch.setattr(asr, "_ffmpeg_to_wav", fake_ffmpeg)
+    monkeypatch.setattr(asr, "load_model", lambda: FakeModel())
+    out = asr.transcribe_file(audio)
+    assert len(calls) == 1
+    assert calls[0][0] == audio
+    assert out == [{"start": 0.5, "end": 1.5, "text": "Ок."}]
+
+
 def test_is_model_loaded_false_until_load(monkeypatch):
     assert asr.is_model_loaded() is False
 
-    class StubWhisper:
-        def __init__(self, *args, **kwargs):
-            pass
+    import sys
+    from types import ModuleType
 
-    monkeypatch.setattr("faster_whisper.WhisperModel", StubWhisper)
+    mod = ModuleType("onnx_asr")
+
+    def load_model(name, **kwargs):
+        m = SimpleNamespace()
+        m.with_vad = lambda vad: m
+        return m
+
+    mod.load_model = load_model
+    mod.load_vad = lambda name, **kwargs: object()
+    monkeypatch.setitem(sys.modules, "onnx_asr", mod)
+
     asr.load_model()
     assert asr.is_model_loaded() is True
-    # second call reuses
     asr.load_model()
     assert asr.is_model_loaded() is True

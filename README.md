@@ -1,6 +1,6 @@
 # Conspector
 
-Локальный конспект встреч: **Chrome-расширение** пишет звук вкладки + микрофон → **сервер** на вашей машине делает Whisper (речь→текст) и LLM-конспект (например Qwen в LAN).
+Локальный конспект встреч: **Chrome-расширение** пишет звук вкладки + микрофон → **сервер** на вашей машине делает GigaAM ASR (речь→текст) и LLM-конспект (например Qwen в LAN).
 
 Аудио и текст не уходят в облако расширения — только на ваш `127.0.0.1` (или указанный сервер) и на настроенный LLM.
 
@@ -9,7 +9,7 @@
 | Каталог | Что это |
 |---|---|
 | [`extension/`](extension/) | Chrome MV3: запись, mute микрофона, upload jobs |
-| [`server/`](server/) | FastAPI: ASR (faster-whisper) + summarize → `conspect.md` / `conspect.html` |
+| [`server/`](server/) | FastAPI: ASR (GigaAM via onnx-asr) + summarize → `conspect.md` / `conspect.html` |
 | [`openspec/`](openspec/) | Спеки / milestones (для разработки) |
 
 Подробности: [extension/README.md](extension/README.md) · [server/README.md](server/README.md)
@@ -30,7 +30,7 @@ cp .env.example .env                # OLLAMA_URL / OLLAMA_MODEL и т.д.
 
 Остановка: **Ctrl+C**. Проверка: `curl http://127.0.0.1:8765/health`
 
-Модель Whisper по умолчанию **не** качается при старте — при **первой** job (нужен интернет один раз). Подробнее — в server README.
+Модель GigaAM по умолчанию **не** качается при старте — при **первой** job (нужен интернет один раз). Нужен системный **ffmpeg**. Подробнее — в server README.
 
 ### 2. Расширение
 
@@ -49,7 +49,7 @@ Chrome → `chrome://extensions` → режим разработчика → «�
 1. Откройте http(s) вкладку со звуком (не `chrome://`).
 2. Popup Conspector: адрес сервера, вкладка, **Старт** (микрофон при первом разе).
 3. Во время записи можно **выключить/включить микрофон** в миксе (звук вкладки пишется всегда).
-4. **Стоп** → сервер: Whisper → LLM → файлы в `server/data/jobs/<id>/`.
+4. **Стоп** → сервер: GigaAM → LLM → файлы в `server/data/jobs/<id>/`.
 5. **Открыть конспект** → HTML со сворачиваемым транскриптом (`conspect.html`). Рядом лежит `conspect.md`.
 
 ## Платформы
